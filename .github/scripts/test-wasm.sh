@@ -47,10 +47,19 @@ endif()
 set(secp256k1_FOUND TRUE)
 EOF
 
-# HAVE___INT128=FALSE forces SECP256K1_WIDEMUL_INT64 to match the prebuilt
-# secp256k1 (a mismatch changes secp256k1's internal struct layout -> ABI break).
-# CMAKE_FIND_ROOT_PATH_MODE_*=BOTH lets find_package see the host-path deps
-# under the Emscripten (cross-compile) toolchain.
+# Non-obvious flags below:
+#  - HAVE___INT128=FALSE forces SECP256K1_WIDEMUL_INT64 to match the prebuilt
+#    secp256k1 from build-wasm.sh (a mismatch changes secp256k1's internal struct
+#    layout -> ABI break). This mirrors build-wasm.sh's -DSECP256K1_WIDEMUL_INT64.
+#  - CMAKE_FIND_ROOT_PATH_MODE_*=BOTH lets find_package see the host-path deps
+#    (our prebuilt archives) under the Emscripten cross-compile toolchain, which
+#    otherwise only searches the emscripten sysroot.
+#  - CMAKE_CROSSCOMPILING_EMULATOR=node makes ctest run each wasm test as
+#    `node test_*.js` (the test binaries are wasm, not native executables).
+#  - -G "Unix Makefiles" pins the generator so CI doesn't pick up Ninja/Xcode.
+#  - MPT_CRYPTO_WERROR=OFF: wasm/toolchain warnings shouldn't fail the test build.
+#  - OPENSSL_USE_STATIC_LIBS + explicit CRYPTO_LIBRARY/INCLUDE_DIR point at the
+#    stripped libcrypto.a from build-wasm.sh, never a system OpenSSL.
 emcmake cmake -S "${ROOT_DIR}" -B "${TEST_BUILD}" \
   -G "Unix Makefiles" \
   -DENABLE_TESTS=ON \

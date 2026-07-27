@@ -121,6 +121,20 @@ if [[ ! -f "${SECP256K1_BUILD}/lib/libsecp256k1.a" ]]; then
     mkdir -p "${SECP256K1_BUILD}"
     cd "${SECP256K1_BUILD}"
 
+    # The non-obvious flags below:
+    #  - SECP256K1_WIDEMUL_INT64: wasm32 has no native 128-bit integer, so force
+    #    the 64-bit field backend. This MUST match the mpt-crypto sources (step 4)
+    #    and the test build (test-wasm.sh's HAVE___INT128=FALSE) — the widemul
+    #    choice changes secp256k1's internal struct layout, so any mismatch is a
+    #    silent ABI break at link time.
+    #  - BUILD_SHARED_LIBS=OFF: force a static libsecp256k1.a. Some CI runners
+    #    default this ON, which builds a .so instead and makes the final emcc link
+    #    (step 5) fail with "libsecp256k1.a: No such file or directory".
+    #  - Only the ECDH module is enabled — the one curve op mpt-crypto needs; the
+    #    rest stay off to keep the wasm small.
+    #  - ECMULT_WINDOW_SIZE / ECMULT_GEN_KB size the precomputed tables: a
+    #    speed-vs-binary-size tradeoff only. They do NOT change results, so they
+    #    have no bearing on proof interop with rippled.
     emcmake cmake .. \
         -DCMAKE_C_FLAGS="-DSECP256K1_WIDEMUL_INT64" \
         -DCMAKE_BUILD_TYPE=Release \
@@ -169,7 +183,13 @@ if [[ ! -f "${OPENSSL_SRC}/libcrypto.a" ]]; then
 
     cd "${OPENSSL_SRC}"
 
-    # Heavily stripped configure — only SHA-256, SHA-512, RAND_bytes, OPENSSL_cleanse
+    # Heavily stripped configure — mpt-crypto only needs SHA-256/512, RAND_bytes,
+    # and OPENSSL_cleanse, so everything else is disabled both to shrink the wasm
+    # and to drop code that needs syscalls Emscripten can't provide. Key choices:
+    #  - linux-generic32: a portable, asm-free 32-bit C target (wasm32 is 32-bit).
+    #    CC=emcc does the actual compile, so --cross-compile-prefix stays empty.
+    #  - OPENSSL_NO_SECURE_MEMORY: the secure heap relies on mmap/madvise, which
+    #    aren't available under wasm.
     perl Configure linux-generic32 \
         --cross-compile-prefix= \
         CC=emcc AR=emar RANLIB=emranlib \
@@ -189,6 +209,8 @@ if [[ ! -f "${OPENSSL_SRC}/libcrypto.a" ]]; then
         -Oz -flto \
         -DOPENSSL_NO_SECURE_MEMORY
 
+    # build_libs (not the default target) builds only libcrypto/libssl — we never
+    # need the openssl apps or test binaries.
     emmake make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)" build_libs
 
     cd "${ROOT_DIR}"
@@ -200,6 +222,10 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Set up secp256k1 private headers (for mpt_scalar.c)
 # ---------------------------------------------------------------------------
+# mpt_scalar.c reuses secp256k1's internal field/scalar arithmetic, which lives
+# in secp256k1's src/ (not its public include/) and is pulled in as <private/...>.
+# Symlink that src/ tree under obj/private/ so -I${OBJ_DIR} resolves those
+# includes. test-wasm.sh reuses the same symlinks (it puts ${OBJ_DIR} on -I too).
 log "Setting up secp256k1 private header symlink"
 mkdir -p "${OBJ_DIR}/private"
 ln -sf "${SECP256K1_SRC}/src"/* "${OBJ_DIR}/private/" 2>/dev/null || true
@@ -242,16 +268,33 @@ EXPORTS="${EXPORTS},_mpt_secp256k1_context"
 EXPORTS="${EXPORTS},_mpt_generate_blinding_factor"
 EXPORTS="${EXPORTS},_mpt_encrypt_amount,_mpt_decrypt_amount"
 EXPORTS="${EXPORTS},_mpt_get_pedersen_commitment"
+# Per-transaction context-hash + proof entries. On each line the get_*_context_hash
+# and get_*_proof (generator) symbols ARE called by the @xrplf/mpt-crypto TS
+# wrapper; the paired _mpt_verify_* symbols are NOT — the wrapper only generates
+# proofs, never verifies. The verifiers (here and the standalone group below) are
+# kept for consumers that verify client-side / for parity with the native lib;
+# they're safe to drop if you want a smaller module. Keep this list in sync with
+# @xrplf/mpt-crypto's index.ts (unexported symbols get dead-stripped downstream).
 EXPORTS="${EXPORTS},_mpt_get_convert_context_hash,_mpt_get_convert_proof,_mpt_verify_convert_proof"
 EXPORTS="${EXPORTS},_mpt_get_clawback_context_hash,_mpt_get_clawback_proof,_mpt_verify_clawback_proof"
 EXPORTS="${EXPORTS},_mpt_get_convert_back_context_hash,_mpt_get_convert_back_proof,_mpt_verify_convert_back_proof"
 EXPORTS="${EXPORTS},_mpt_get_send_context_hash,_mpt_get_confidential_send_proof,_mpt_verify_send_proof"
+# Standalone verifiers + low-level helpers — none used by the TS wrapper today
+# (see the note above); exported for client-side verification / native parity.
 EXPORTS="${EXPORTS},_mpt_verify_revealed_amount"
 EXPORTS="${EXPORTS},_mpt_verify_send_range_proof"
 EXPORTS="${EXPORTS},_mpt_verify_aggregated_bulletproof"
 EXPORTS="${EXPORTS},_mpt_make_ec_pair,_mpt_serialize_ec_pair"
 EXPORTS="${EXPORTS},_mpt_compute_convert_back_remainder"
 
+# Why these -s link flags (they define the JS-facing contract, so don't drop them
+# without checking the @xrplf/mpt-crypto TS wrapper):
+#  - MODULARIZE + EXPORT_NAME: emit a factory `MptCrypto()` instead of a global,
+#    so the module can be require()'d / imported and loaded lazily.
+#  - WASM_BIGINT: marshal i64 <-> JS BigInt directly — mpt amounts are uint64_t.
+#  - ALLOW_MEMORY_GROWTH: bulletproof generation allocates a lot; let the heap grow.
+#  - EXPORTED_RUNTIME_METHODS: the TS marshalling layer needs HEAPU8 + ccall/cwrap.
+#  - ENVIRONMENT=web,node: xrpl.js runs in both browsers and Node, so build for both.
 emcc -Oz -flto \
     "${OBJ_DIR}"/*.o \
     "${SECP256K1_BUILD}/lib/libsecp256k1.a" \
