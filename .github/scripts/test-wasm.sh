@@ -81,3 +81,31 @@ cmake --build "${TEST_BUILD}" -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
 # Each test executable is a wasm module; ctest runs it as `node test_*.js`.
 cd "${TEST_BUILD}"
 ctest --output-on-failure
+
+# ---------------------------------------------------------------------------
+# Smoke-test the shipped glue
+# ---------------------------------------------------------------------------
+# ctest above validates the crypto on its own test binaries; it never loads the
+# MODULARIZE (.js) / EXPORT_ES6 (.mjs) glue build-wasm.sh actually ships. Load each
+# the way consumers do (require / import) and exercise the marshalling contract the
+# wrapper needs: instantiate, init the secp256k1 context, and run one malloc+HEAPU8
+# export. A bad -s flag fails here instead of downstream. (Crypto correctness is
+# ctest's job — this only guards the glue/ABI.)
+GLUE_DIR="${ROOT_DIR}/emcc_out"
+echo "Smoke-testing the CJS + ESM glue..."
+node --input-type=module -e "
+import { createRequire } from 'module'
+const require = createRequire(import.meta.url)
+async function check(label, factory) {
+  const m = await factory()
+  if (m._mpt_secp256k1_context() === 0) throw new Error(label + ': context init failed')
+  const ptr = m._malloc(32)
+  const rc = m._mpt_generate_blinding_factor(ptr)
+  const written = m.HEAPU8.slice(ptr, ptr + 32).some(b => b !== 0)
+  m._free(ptr)
+  if (rc !== 0 || !written) throw new Error(label + ': marshalling path failed')
+  console.log('  ' + label + ' OK')
+}
+await check('mpt_crypto.js  (CJS)', require('${GLUE_DIR}/mpt_crypto.js'))
+await check('mpt_crypto.mjs (ESM)', (await import('${GLUE_DIR}/mpt_crypto.mjs')).default)
+"
