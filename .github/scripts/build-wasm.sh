@@ -295,24 +295,38 @@ EXPORTS="${EXPORTS},_mpt_compute_convert_back_remainder"
 #  - ALLOW_MEMORY_GROWTH: bulletproof generation allocates a lot; let the heap grow.
 #  - EXPORTED_RUNTIME_METHODS: the TS marshalling layer needs HEAPU8 + ccall/cwrap.
 #  - ENVIRONMENT=web,node: xrpl.js runs in both browsers and Node, so build for both.
-emcc -Oz -flto \
-    "${OBJ_DIR}"/*.o \
-    "${SECP256K1_BUILD}/lib/libsecp256k1.a" \
-    "${OPENSSL_SRC}/libcrypto.a" \
-    -sMODULARIZE=1 \
-    -sEXPORT_NAME=MptCrypto \
-    -sWASM_BIGINT=1 \
-    -sALLOW_MEMORY_GROWTH=1 \
-    -sEXPORTED_FUNCTIONS="${EXPORTS}" \
-    '-sEXPORTED_RUNTIME_METHODS=["ccall","cwrap","HEAPU8"]' \
-    -sENVIRONMENT=web,node \
-    -o "${OUT_DIR}/mpt_crypto.js"
+LINK_FLAGS=(
+    -Oz -flto
+    "${OBJ_DIR}"/*.o
+    "${SECP256K1_BUILD}/lib/libsecp256k1.a"
+    "${OPENSSL_SRC}/libcrypto.a"
+    -sMODULARIZE=1
+    -sEXPORT_NAME=MptCrypto
+    -sWASM_BIGINT=1
+    -sALLOW_MEMORY_GROWTH=1
+    -sEXPORTED_FUNCTIONS="${EXPORTS}"
+    '-sEXPORTED_RUNTIME_METHODS=["ccall","cwrap","HEAPU8"]'
+    -sENVIRONMENT=web,node
+)
+
+# @xrplf/mpt-crypto ships dual CJS+ESM so the same package works under Node
+# `require`/Jest AND under bundlers/browsers via `import`. Emit BOTH Emscripten
+# glues from the identical objects — they wrap the SAME mpt_crypto.wasm:
+#   - mpt_crypto.js  : MODULARIZE CommonJS  (require()'d by the CJS build)
+#   - mpt_crypto.mjs : EXPORT_ES6 ES module (imported by the ESM build; uses
+#                      `new URL('mpt_crypto.wasm', import.meta.url)` so bundlers
+#                      auto-emit the .wasm as an asset instead of a runtime read).
+# Keep these two links in lockstep; the .mjs is what makes the browser path work.
+emcc "${LINK_FLAGS[@]}" -o "${OUT_DIR}/mpt_crypto.js"
+emcc "${LINK_FLAGS[@]}" -sEXPORT_ES6=1 -o "${OUT_DIR}/mpt_crypto.mjs"
 
 # ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 JS_SIZE=$(wc -c < "${OUT_DIR}/mpt_crypto.js")
+MJS_SIZE=$(wc -c < "${OUT_DIR}/mpt_crypto.mjs")
 WASM_SIZE=$(wc -c < "${OUT_DIR}/mpt_crypto.wasm")
 log "Done!"
 log "  ${OUT_DIR}/mpt_crypto.js   (${JS_SIZE} bytes)"
+log "  ${OUT_DIR}/mpt_crypto.mjs  (${MJS_SIZE} bytes)"
 log "  ${OUT_DIR}/mpt_crypto.wasm (${WASM_SIZE} bytes)"
