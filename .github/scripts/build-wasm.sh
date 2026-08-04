@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # build-wasm.sh — Build the shipped mpt-crypto WebAssembly module.
 #
-# Produces the single JS-consumable artifact that downstream JS/TS libraries
+# Produces the JS-consumable artifacts that downstream JS/TS libraries
 # (e.g. xrpl.js) vendor:
-#   emcc_out/mpt_crypto.js    (Emscripten MODULARIZE glue / loader)
+#   emcc_out/mpt_crypto.js    (Emscripten MODULARIZE CommonJS glue / loader)
+#   emcc_out/mpt_crypto.mjs   (EXPORT_ES6 ES-module glue for bundlers/browsers)
 #   emcc_out/mpt_crypto.wasm  (the compiled module, curated exports)
 #
 # Builds ONLY the module (not tests) — the companion test-wasm.sh validates it
 # by running the crypto suite under Node; the CI workflow runs both in order.
-# It has a dedicated emcc link (rather than CMake, like the native shared lib)
-# because the wasm module needs MODULARIZE/exports/WASM_BIGINT.
+# It has a dedicated emcc link (rather than CMake) because the wasm module needs
+# MODULARIZE/exports/WASM_BIGINT.
 #
 # As a side effect it builds the wasm-target secp256k1 + OpenSSL static libs
 # into emcc_build/, which test-wasm.sh reuses.
@@ -114,7 +115,8 @@ if [[ ! -f "${SECP256K1_BUILD}/lib/libsecp256k1.a" ]]; then
     # not. Verify the checked-out commit against the pin.
     actual_sha="$(git -C "${SECP256K1_SRC}" rev-parse HEAD)"
     if [[ "${actual_sha}" != "${SECP256K1_COMMIT}" ]]; then
-        echo "ERROR: secp256k1 ${SECP256K1_VERSION} is ${actual_sha}, expected ${SECP256K1_COMMIT}" >&2
+        echo "ERROR: secp256k1 ${SECP256K1_VERSION} is ${actual_sha}, expected ${SECP256K1_COMMIT}." >&2
+        echo "       If conan.lock bumped secp256k1, update SECP256K1_COMMIT in this script." >&2
         exit 1
     fi
 
@@ -169,11 +171,14 @@ if [[ ! -f "${OPENSSL_SRC}/libcrypto.a" ]]; then
     if [[ ! -d "${OPENSSL_SRC}" ]]; then
         cd "${BUILD_DIR}"
         openssl_tarball="openssl-${OPENSSL_VERSION}.tar.gz"
-        curl -sL "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/${openssl_tarball}" \
+        # --fail so an HTTP error (e.g. 404) aborts here with a clear status,
+        # rather than saving the error body and surfacing as a hash mismatch.
+        curl -fsSL "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/${openssl_tarball}" \
             -o "${openssl_tarball}"
         got="$(sha256_of "${openssl_tarball}")"
         if [[ "${got}" != "${OPENSSL_SHA256}" ]]; then
-            echo "ERROR: ${openssl_tarball} sha256 ${got}, expected ${OPENSSL_SHA256}" >&2
+            echo "ERROR: ${openssl_tarball} sha256 ${got}, expected ${OPENSSL_SHA256}." >&2
+            echo "       If conan.lock bumped openssl, update OPENSSL_SHA256 in this script." >&2
             exit 1
         fi
         tar xzf "${openssl_tarball}"
@@ -242,18 +247,28 @@ CFLAGS="-Oz -flto \
     -I${OBJ_DIR} \
     -DSECP256K1_WIDEMUL_INT64"
 
+# Collect the objects for THIS source set explicitly and link that list (not a
+# ${OBJ_DIR}/*.o glob), so a renamed or deleted source can't leave a stale .o
+# behind for the link to silently pick up. Caveat: the -nt check compares only
+# the source's mtime, not its headers — after editing a header, rebuild with
+# --clean (or delete emcc_build/obj) to force recompilation.
+OBJECTS=()
 for f in "${ROOT_DIR}"/src/*.c; do
     name="$(basename "$f" .c)"
-    if [[ "$f" -nt "${OBJ_DIR}/${name}.o" ]]; then
+    obj="${OBJ_DIR}/${name}.o"
+    OBJECTS+=("${obj}")
+    if [[ "$f" -nt "${obj}" ]]; then
         echo "  CC  ${name}.c"
-        emcc ${CFLAGS} -c "$f" -o "${OBJ_DIR}/${name}.o"
+        emcc ${CFLAGS} -c "$f" -o "${obj}"
     fi
 done
 
 name="mpt_utility"
-if [[ "${ROOT_DIR}/src/utility/${name}.cpp" -nt "${OBJ_DIR}/${name}.o" ]]; then
+obj="${OBJ_DIR}/${name}.o"
+OBJECTS+=("${obj}")
+if [[ "${ROOT_DIR}/src/utility/${name}.cpp" -nt "${obj}" ]]; then
     echo "  CXX ${name}.cpp"
-    em++ ${CFLAGS} -std=c++17 -c "${ROOT_DIR}/src/utility/${name}.cpp" -o "${OBJ_DIR}/${name}.o"
+    em++ ${CFLAGS} -std=c++17 -c "${ROOT_DIR}/src/utility/${name}.cpp" -o "${obj}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -272,15 +287,15 @@ EXPORTS="${EXPORTS},_mpt_get_pedersen_commitment"
 # and get_*_proof (generator) symbols ARE called by the @xrplf/mpt-crypto TS
 # wrapper; the paired _mpt_verify_* symbols are NOT — the wrapper only generates
 # proofs, never verifies. The verifiers (here and the standalone group below) are
-# kept for consumers that verify client-side / for parity with the native lib;
-# they're safe to drop if you want a smaller module. Keep this list in sync with
+# kept for consumers that verify client-side; they're safe to drop if you want a
+# smaller module. Keep this list in sync with
 # @xrplf/mpt-crypto's index.ts (unexported symbols get dead-stripped downstream).
 EXPORTS="${EXPORTS},_mpt_get_convert_context_hash,_mpt_get_convert_proof,_mpt_verify_convert_proof"
 EXPORTS="${EXPORTS},_mpt_get_clawback_context_hash,_mpt_get_clawback_proof,_mpt_verify_clawback_proof"
 EXPORTS="${EXPORTS},_mpt_get_convert_back_context_hash,_mpt_get_convert_back_proof,_mpt_verify_convert_back_proof"
 EXPORTS="${EXPORTS},_mpt_get_send_context_hash,_mpt_get_confidential_send_proof,_mpt_verify_send_proof"
 # Standalone verifiers + low-level helpers — none used by the TS wrapper today
-# (see the note above); exported for client-side verification / native parity.
+# (see the note above); exported for client-side verification.
 EXPORTS="${EXPORTS},_mpt_verify_revealed_amount"
 EXPORTS="${EXPORTS},_mpt_verify_send_range_proof"
 EXPORTS="${EXPORTS},_mpt_verify_aggregated_bulletproof"
@@ -297,7 +312,7 @@ EXPORTS="${EXPORTS},_mpt_compute_convert_back_remainder"
 #  - ENVIRONMENT=web,node: xrpl.js runs in both browsers and Node, so build for both.
 LINK_FLAGS=(
     -Oz -flto
-    "${OBJ_DIR}"/*.o
+    "${OBJECTS[@]}"
     "${SECP256K1_BUILD}/lib/libsecp256k1.a"
     "${OPENSSL_SRC}/libcrypto.a"
     -sMODULARIZE=1
@@ -318,7 +333,18 @@ LINK_FLAGS=(
 #                      auto-emit the .wasm as an asset instead of a runtime read).
 # Keep these two links in lockstep; the .mjs is what makes the browser path work.
 emcc "${LINK_FLAGS[@]}" -o "${OUT_DIR}/mpt_crypto.js"
+wasm_sha_cjs="$(sha256_of "${OUT_DIR}/mpt_crypto.wasm")"
 emcc "${LINK_FLAGS[@]}" -sEXPORT_ES6=1 -o "${OUT_DIR}/mpt_crypto.mjs"
+wasm_sha_esm="$(sha256_of "${OUT_DIR}/mpt_crypto.wasm")"
+
+# The second link (EXPORT_ES6) overwrites the .wasm the first emitted. Both are
+# meant to wrap the byte-identical module, so enforce it — if they ever diverge,
+# the CJS glue would ship validated against a .wasm that no longer exists on disk.
+if [[ "${wasm_sha_cjs}" != "${wasm_sha_esm}" ]]; then
+    echo "ERROR: CJS and ESM links produced different mpt_crypto.wasm" >&2
+    echo "       (${wasm_sha_cjs} vs ${wasm_sha_esm})" >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Done

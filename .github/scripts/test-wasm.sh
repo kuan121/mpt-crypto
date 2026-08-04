@@ -28,7 +28,16 @@ SECP256K1_INC="${BUILD_DIR}/secp256k1/include"
 # build-wasm.sh symlinks secp256k1's private src/ headers under obj/private/;
 # mpt_scalar.c includes them as <private/...>, so this dir must be on -I.
 PRIVATE_INC="${BUILD_DIR}/obj"
-OPENSSL_DIR="$(dirname "$(find "${BUILD_DIR}" -maxdepth 2 -name libcrypto.a | head -n1)")"
+# Guard the find like the secp256k1 check above: an empty result would make
+# dirname yield "." and fail far later as a confusing cmake error; a leftover
+# openssl-<old>/ after a version bump would also make the pick arbitrary.
+OPENSSL_LIB="$(find "${BUILD_DIR}" -maxdepth 2 -name libcrypto.a | head -n1)"
+if [[ -z "${OPENSSL_LIB}" ]]; then
+  echo "ERROR: OpenSSL libcrypto.a not found under ${BUILD_DIR}." >&2
+  echo "       Run ./.github/scripts/build-wasm.sh first." >&2
+  exit 1
+fi
+OPENSSL_DIR="$(dirname "${OPENSSL_LIB}")"
 
 TEST_BUILD="${BUILD_DIR}/wasm-tests"
 DEPS_DIR="${BUILD_DIR}/wasm-deps"
@@ -91,7 +100,11 @@ ctest --output-on-failure
 # wrapper needs: instantiate, init the secp256k1 context, and run one malloc+HEAPU8
 # export. A bad -s flag fails here instead of downstream. (Crypto correctness is
 # ctest's job — this only guards the glue/ABI.)
-GLUE_DIR="${ROOT_DIR}/emcc_out"
+#
+# GLUE_DIR defaults to emcc_out (the freshly built tree) for local runs. CI
+# overrides it to the STAGED bundle dir so this validates exactly what ships —
+# a file dropped from the bundle fails here instead of shipping green.
+GLUE_DIR="${GLUE_DIR:-${ROOT_DIR}/emcc_out}"
 echo "Smoke-testing the CJS + ESM glue..."
 node --input-type=module -e "
 import { createRequire } from 'module'

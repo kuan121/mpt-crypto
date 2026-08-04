@@ -5,9 +5,6 @@ cmake-build-*/
 .venv
 .vscode/
 
-# Emscripten build artifacts
+# Emscripten build artifacts (cover the built .js/.mjs/.wasm outputs)
 emcc_build/
 emcc_out/
-
-# Compiled WebAssembly
-*.wasm

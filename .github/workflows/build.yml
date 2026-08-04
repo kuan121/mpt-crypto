@@ -106,8 +106,8 @@ jobs:
       contents: read
     uses: ./.github/workflows/build-shared-libs.yml
 
-  # Build the portable WebAssembly module (mpt_crypto.js + .wasm) for JS/TS
-  # consumers (e.g. xrpl.js) by calling the reusable workflow.
+  # Build the portable WebAssembly module (mpt_crypto.js + .mjs + .wasm) for
+  # JS/TS consumers (e.g. xrpl.js) by calling the reusable workflow.
   wasm:
     name: Build WASM module
     permissions:
