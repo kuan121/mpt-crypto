@@ -37,8 +37,9 @@ jobs:
       - name: Set up Emscripten
         uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
         with:
-          # Pinned for reproducible wasm output. The emsdk version does not
-          # affect crypto results, only the binary's codegen/size.
+          # Pinned for reproducible wasm output. The emsdk version does not change
+          # crypto results (browser-safety is handled by GROWABLE_ARRAYBUFFERS=0 in
+          # build-wasm.sh — see the note there on resizable ArrayBuffers).
           version: 6.0.2
 
       - name: Set up Node

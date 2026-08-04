@@ -307,7 +307,17 @@ EXPORTS="${EXPORTS},_mpt_compute_convert_back_remainder"
 #  - MODULARIZE + EXPORT_NAME: emit a factory `MptCrypto()` instead of a global,
 #    so the module can be require()'d / imported and loaded lazily.
 #  - WASM_BIGINT: marshal i64 <-> JS BigInt directly — mpt amounts are uint64_t.
-#  - ALLOW_MEMORY_GROWTH: bulletproof generation allocates a lot; let the heap grow.
+#  - ALLOW_MEMORY_GROWTH: let the heap grow on demand instead of reserving a fixed
+#    block up front.
+#  - GROWABLE_ARRAYBUFFERS=0: emsdk 6.x defaults this to 1, which grows the heap in
+#    place backed by a RESIZABLE ArrayBuffer. A subarray of a resizable buffer makes
+#    TextDecoder.decode throw in Chrome ("ArrayBuffer must not be resizable"), which
+#    breaks the xrpl.js browser tests. Setting 0 keeps growth but reallocates a plain
+#    (non-resizable) buffer on each grow — browser-safe, and no fixed memory cap.
+#  - MAXIMUM_MEMORY=128MB: a defense-in-depth ceiling. The real working set is small
+#    and stable — dominated by secp256k1's static tables, with per-op allocations
+#    freed and reused, so it does not grow over time — and stays far below this cap.
+#    The ceiling just bounds a hypothetical runaway well under the 2GB default.
 #  - EXPORTED_RUNTIME_METHODS: the TS marshalling layer needs HEAPU8 + ccall/cwrap.
 #  - ENVIRONMENT=web,node: xrpl.js runs in both browsers and Node, so build for both.
 LINK_FLAGS=(
@@ -319,6 +329,8 @@ LINK_FLAGS=(
     -sEXPORT_NAME=MptCrypto
     -sWASM_BIGINT=1
     -sALLOW_MEMORY_GROWTH=1
+    -sGROWABLE_ARRAYBUFFERS=0
+    -sMAXIMUM_MEMORY=134217728
     -sEXPORTED_FUNCTIONS="${EXPORTS}"
     '-sEXPORTED_RUNTIME_METHODS=["ccall","cwrap","HEAPU8"]'
     -sENVIRONMENT=web,node
