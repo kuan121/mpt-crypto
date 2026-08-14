@@ -301,6 +301,13 @@ EXPORTS="${EXPORTS},_mpt_verify_send_range_proof"
 EXPORTS="${EXPORTS},_mpt_verify_aggregated_bulletproof"
 EXPORTS="${EXPORTS},_mpt_make_ec_pair,_mpt_serialize_ec_pair"
 EXPORTS="${EXPORTS},_mpt_compute_convert_back_remainder"
+# Homomorphic ElGamal ciphertext add/subtract (secp256k1_pubkey in/out, defined in
+# src/elgamal.c, return 1 on success). Not used by the single-transaction builders,
+# but batching multiple balance-mutating Confidential MPT transactions for one
+# (account, token) requires predicting the post-inner spending balance client-side
+# (CB_S' = CB_S -/+ the encrypted amount) so each chained proof binds to it. The TS
+# wrapper marshals bytes<->secp256k1_pubkey via _mpt_make_ec_pair/_mpt_serialize_ec_pair.
+EXPORTS="${EXPORTS},_secp256k1_elgamal_add,_secp256k1_elgamal_subtract"
 
 # Why these -s link flags (they define the JS-facing contract, so don't drop them
 # without checking the @xrplf/mpt-crypto TS wrapper):

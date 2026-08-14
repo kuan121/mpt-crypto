@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# Build Shared Libraries
+# Build Native Libraries
 #
 # Builds the mpt-crypto C library for each supported platform in TWO forms:
 #
