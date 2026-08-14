@@ -103,13 +103,13 @@ jobs:
         run: ctest --output-on-failure
         working-directory: ${{ env.BUILD_DIR }}
 
-  # Build the shared-library bundle (per-platform .so/.dylib/.dll) by calling
-  # the reusable workflow.
+  # Build the native-library bundle (per-platform shared .so/.dylib/.dll +
+  # self-contained static .a/.lib) by calling the reusable workflow.
   native-binaries:
-    name: Build native shared libraries
+    name: Build native libraries
     permissions:
       contents: read
-    uses: ./.github/workflows/build-shared-libs.yml
+    uses: ./.github/workflows/build-native-libs.yml
 
   # Build the portable WebAssembly module (mpt_crypto.js + .mjs + .wasm) for
   # JS/TS consumers (e.g. xrpl.js) by calling the reusable workflow.
