@@ -95,7 +95,9 @@ ctest --output-on-failure
 # Smoke-test the shipped glue
 # ---------------------------------------------------------------------------
 # ctest above validates the crypto on its own test binaries; it never loads the
-# MODULARIZE (.js) / EXPORT_ES6 (.mjs) glue build-wasm.sh actually ships. Load each
+# Node glue build-wasm.sh ships — mpt_crypto.js (CJS) and mpt_crypto.mjs (ESM). (The
+# third glue, mpt_crypto.web.mjs, is browser-only — ENVIRONMENT=web,worker, no Node
+# loader — so it can't load here; downstream browser tests cover it.) Load each
 # the way consumers do (require / import) and exercise the marshalling contract the
 # wrapper needs: instantiate, init the secp256k1 context, and run one malloc+HEAPU8
 # export. A bad -s flag fails here instead of downstream. (Crypto correctness is

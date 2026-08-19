@@ -327,7 +327,8 @@ EXPORTS="${EXPORTS},_secp256k1_elgamal_add,_secp256k1_elgamal_subtract"
 #    freed and reused, so it does not grow over time — and stays far below this cap.
 #    The ceiling just bounds a hypothetical runaway well under the 2GB default.
 #  - EXPORTED_RUNTIME_METHODS: the TS marshalling layer needs HEAPU8 + ccall/cwrap.
-#  - ENVIRONMENT=web,node: xrpl.js runs in both browsers and Node, so build for both.
+#  - ENVIRONMENT=web,node: the base .js/.mjs glues run under Node; a dedicated
+#    browser glue is re-linked below as web,worker (no Node branch) — see the links.
 LINK_FLAGS=(
     -Oz -flto
     "${OBJECTS[@]}"
