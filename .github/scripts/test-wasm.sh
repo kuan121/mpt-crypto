@@ -95,19 +95,21 @@ ctest --output-on-failure
 # Smoke-test the shipped glue
 # ---------------------------------------------------------------------------
 # ctest above validates the crypto on its own test binaries; it never loads the
-# Node glue build-wasm.sh ships — mpt_crypto.js (CJS) and mpt_crypto.mjs (ESM). (The
-# third glue, mpt_crypto.web.mjs, is browser-only — ENVIRONMENT=web,worker, no Node
-# loader — so it can't load here; downstream browser tests cover it.) Load each
-# the way consumers do (require / import) and exercise the marshalling contract the
+# glue build-wasm.sh ships. Load each and exercise the marshalling contract the
 # wrapper needs: instantiate, init the secp256k1 context, and run one malloc+HEAPU8
 # export. A bad -s flag fails here instead of downstream. (Crypto correctness is
 # ctest's job — this only guards the glue/ABI.)
+#
+# mpt_crypto.js/.mjs load the wasm themselves (require / import). mpt_crypto.web.mjs
+# is the browser glue (ENVIRONMENT=web,worker): no Node loader — it fetches the wasm
+# in a browser — so here we hand it the bytes via `wasmBinary`, smoke-testing that it
+# instantiates and its ABI works. Its real fetch path is covered by browser tests.
 #
 # GLUE_DIR defaults to emcc_out (the freshly built tree) for local runs. CI
 # overrides it to the STAGED bundle dir so this validates exactly what ships —
 # a file dropped from the bundle fails here instead of shipping green.
 GLUE_DIR="${GLUE_DIR:-${ROOT_DIR}/emcc_out}"
-echo "Smoke-testing the CJS + ESM glue..."
+echo "Smoke-testing the CJS + ESM + browser glue..."
 node --input-type=module -e "
 import { createRequire } from 'module'
 const require = createRequire(import.meta.url)
@@ -123,4 +125,10 @@ async function check(label, factory) {
 }
 await check('mpt_crypto.js  (CJS)', require('${GLUE_DIR}/mpt_crypto.js'))
 await check('mpt_crypto.mjs (ESM)', (await import('${GLUE_DIR}/mpt_crypto.mjs')).default)
+// Browser glue: no Node loader, so read the wasm ourselves and pass it in.
+await check('mpt_crypto.web.mjs (web)', async () => {
+  const { default: factory } = await import('${GLUE_DIR}/mpt_crypto.web.mjs')
+  const wasmBinary = require('fs').readFileSync('${GLUE_DIR}/mpt_crypto.wasm')
+  return factory({ wasmBinary })
+})
 "
