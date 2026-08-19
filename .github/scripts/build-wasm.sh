@@ -3,9 +3,10 @@
 #
 # Produces the JS-consumable artifacts that downstream JS/TS libraries
 # (e.g. xrpl.js) vendor:
-#   emcc_out/mpt_crypto.js    (Emscripten MODULARIZE CommonJS glue / loader)
-#   emcc_out/mpt_crypto.mjs   (EXPORT_ES6 ES-module glue for bundlers/browsers)
-#   emcc_out/mpt_crypto.wasm  (the compiled module, curated exports)
+#   emcc_out/mpt_crypto.js      (MODULARIZE CommonJS glue — Node require)
+#   emcc_out/mpt_crypto.mjs     (EXPORT_ES6 ESM glue, web+node — Node import)
+#   emcc_out/mpt_crypto.web.mjs (EXPORT_ES6 ESM glue, web only — bundlers/browsers)
+#   emcc_out/mpt_crypto.wasm    (the compiled module, curated exports)
 #
 # Builds ONLY the module (not tests) — the companion test-wasm.sh validates it
 # by running the crypto suite under Node; the CI workflow runs both in order.
@@ -344,24 +345,35 @@ LINK_FLAGS=(
 )
 
 # @xrplf/mpt-crypto ships dual CJS+ESM so the same package works under Node
-# `require`/Jest AND under bundlers/browsers via `import`. Emit BOTH Emscripten
-# glues from the identical objects — they wrap the SAME mpt_crypto.wasm:
-#   - mpt_crypto.js  : MODULARIZE CommonJS  (require()'d by the CJS build)
-#   - mpt_crypto.mjs : EXPORT_ES6 ES module (imported by the ESM build; uses
-#                      `new URL('mpt_crypto.wasm', import.meta.url)` so bundlers
-#                      auto-emit the .wasm as an asset instead of a runtime read).
-# Keep these two links in lockstep; the .mjs is what makes the browser path work.
+# `require`/Jest AND under bundlers/browsers via `import`. Emit THREE Emscripten
+# glues from the identical objects — they all wrap the SAME mpt_crypto.wasm:
+#   - mpt_crypto.js      : MODULARIZE CommonJS   (require()'d by the CJS build / Node)
+#   - mpt_crypto.mjs     : EXPORT_ES6, web+node  (Node `import`; its Node branch runs
+#                          `await import("node:module")` to read the .wasm from disk)
+#   - mpt_crypto.web.mjs : EXPORT_ES6, web only  (bundlers/browsers) — the same glue
+#                          built with ENVIRONMENT=web,worker instead of web,node, so it
+#                          carries NO Node branch and thus no `node:` imports. Browser
+#                          bundlers reject the `node:` URI scheme at build time even
+#                          though that code is dead in a browser, so the package's
+#                          `browser` export must point here, not at mpt_crypto.mjs.
+# Both ESM glues use `new URL('mpt_crypto.wasm', import.meta.url)` so bundlers
+# auto-emit the .wasm as an asset instead of a runtime read. Keep the three links in
+# lockstep — they must wrap the byte-identical module.
 emcc "${LINK_FLAGS[@]}" -o "${OUT_DIR}/mpt_crypto.js"
 wasm_sha_cjs="$(sha256_of "${OUT_DIR}/mpt_crypto.wasm")"
 emcc "${LINK_FLAGS[@]}" -sEXPORT_ES6=1 -o "${OUT_DIR}/mpt_crypto.mjs"
 wasm_sha_esm="$(sha256_of "${OUT_DIR}/mpt_crypto.wasm")"
+# The trailing -sENVIRONMENT overrides web,node from LINK_FLAGS, dropping the Node
+# code path (and its node: imports) from this browser-only glue.
+emcc "${LINK_FLAGS[@]}" -sEXPORT_ES6=1 -sENVIRONMENT=web,worker -o "${OUT_DIR}/mpt_crypto.web.mjs"
+wasm_sha_web="$(sha256_of "${OUT_DIR}/mpt_crypto.wasm")"
 
-# The second link (EXPORT_ES6) overwrites the .wasm the first emitted. Both are
-# meant to wrap the byte-identical module, so enforce it — if they ever diverge,
-# the CJS glue would ship validated against a .wasm that no longer exists on disk.
-if [[ "${wasm_sha_cjs}" != "${wasm_sha_esm}" ]]; then
-    echo "ERROR: CJS and ESM links produced different mpt_crypto.wasm" >&2
-    echo "       (${wasm_sha_cjs} vs ${wasm_sha_esm})" >&2
+# Each link overwrites the .wasm the previous emitted. All three are meant to wrap
+# the byte-identical module, so enforce it — if they ever diverge, a glue would ship
+# validated against a .wasm that no longer exists on disk.
+if [[ "${wasm_sha_cjs}" != "${wasm_sha_esm}" || "${wasm_sha_cjs}" != "${wasm_sha_web}" ]]; then
+    echo "ERROR: the CJS / ESM / web links produced different mpt_crypto.wasm" >&2
+    echo "       (cjs=${wasm_sha_cjs} esm=${wasm_sha_esm} web=${wasm_sha_web})" >&2
     exit 1
 fi
 
@@ -370,8 +382,10 @@ fi
 # ---------------------------------------------------------------------------
 JS_SIZE=$(wc -c < "${OUT_DIR}/mpt_crypto.js")
 MJS_SIZE=$(wc -c < "${OUT_DIR}/mpt_crypto.mjs")
+WEB_MJS_SIZE=$(wc -c < "${OUT_DIR}/mpt_crypto.web.mjs")
 WASM_SIZE=$(wc -c < "${OUT_DIR}/mpt_crypto.wasm")
 log "Done!"
-log "  ${OUT_DIR}/mpt_crypto.js   (${JS_SIZE} bytes)"
-log "  ${OUT_DIR}/mpt_crypto.mjs  (${MJS_SIZE} bytes)"
-log "  ${OUT_DIR}/mpt_crypto.wasm (${WASM_SIZE} bytes)"
+log "  ${OUT_DIR}/mpt_crypto.js      (${JS_SIZE} bytes)"
+log "  ${OUT_DIR}/mpt_crypto.mjs     (${MJS_SIZE} bytes)"
+log "  ${OUT_DIR}/mpt_crypto.web.mjs (${WEB_MJS_SIZE} bytes)"
+log "  ${OUT_DIR}/mpt_crypto.wasm    (${WASM_SIZE} bytes)"
