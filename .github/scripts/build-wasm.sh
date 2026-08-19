@@ -364,14 +364,20 @@ emcc "${LINK_FLAGS[@]}" -o "${OUT_DIR}/mpt_crypto.js"
 wasm_sha_cjs="$(sha256_of "${OUT_DIR}/mpt_crypto.wasm")"
 emcc "${LINK_FLAGS[@]}" -sEXPORT_ES6=1 -o "${OUT_DIR}/mpt_crypto.mjs"
 wasm_sha_esm="$(sha256_of "${OUT_DIR}/mpt_crypto.wasm")"
-# The trailing -sENVIRONMENT overrides web,node from LINK_FLAGS, dropping the Node
-# code path (and its node: imports) from this browser-only glue.
-emcc "${LINK_FLAGS[@]}" -sEXPORT_ES6=1 -sENVIRONMENT=web,worker -o "${OUT_DIR}/mpt_crypto.web.mjs"
-wasm_sha_web="$(sha256_of "${OUT_DIR}/mpt_crypto.wasm")"
+# Browser-only glue. -sENVIRONMENT=web,worker (overriding web,node) drops the Node
+# code path and its `node:` imports. Emscripten names the .wasm after the -o basename,
+# so link under the shared `mpt_crypto` name in a temp dir — the glue then references
+# `mpt_crypto.wasm`, the one we ship — and move just the glue out. Linking straight to
+# mpt_crypto.web.mjs would emit and reference a separate mpt_crypto.web.wasm.
+web_tmp="$(mktemp -d)"
+emcc "${LINK_FLAGS[@]}" -sEXPORT_ES6=1 -sENVIRONMENT=web,worker -o "${web_tmp}/mpt_crypto.mjs"
+wasm_sha_web="$(sha256_of "${web_tmp}/mpt_crypto.wasm")"
+mv "${web_tmp}/mpt_crypto.mjs" "${OUT_DIR}/mpt_crypto.web.mjs"
+rm -rf "${web_tmp}"
 
-# Each link overwrites the .wasm the previous emitted. All three are meant to wrap
-# the byte-identical module, so enforce it — if they ever diverge, a glue would ship
-# validated against a .wasm that no longer exists on disk.
+# The .js/.mjs links overwrite the OUT_DIR .wasm in place; the browser link builds its
+# own in a temp dir. All three must wrap the byte-identical module (the browser glue
+# references the shipped mpt_crypto.wasm), so enforce it.
 if [[ "${wasm_sha_cjs}" != "${wasm_sha_esm}" || "${wasm_sha_cjs}" != "${wasm_sha_web}" ]]; then
     echo "ERROR: the CJS / ESM / web links produced different mpt_crypto.wasm" >&2
     echo "       (cjs=${wasm_sha_cjs} esm=${wasm_sha_esm} web=${wasm_sha_web})" >&2
