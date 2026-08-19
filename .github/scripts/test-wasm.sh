@@ -102,8 +102,9 @@ ctest --output-on-failure
 #
 # mpt_crypto.js/.mjs load the wasm themselves (require / import). mpt_crypto.web.mjs
 # is the browser glue (ENVIRONMENT=web,worker): no Node loader — it fetches the wasm
-# in a browser — so here we hand it the bytes via `wasmBinary`, smoke-testing that it
-# instantiates and its ABI works. Its real fetch path is covered by browser tests.
+# in a browser — so here we instantiate it ourselves via the `instantiateWasm` hook
+# (which createWasm honors before any fetch), smoke-testing that it instantiates and
+# its ABI works. Its real fetch path is covered by downstream browser tests.
 #
 # GLUE_DIR defaults to emcc_out (the freshly built tree) for local runs. CI
 # overrides it to the STAGED bundle dir so this validates exactly what ships —
@@ -125,10 +126,15 @@ async function check(label, factory) {
 }
 await check('mpt_crypto.js  (CJS)', require('${GLUE_DIR}/mpt_crypto.js'))
 await check('mpt_crypto.mjs (ESM)', (await import('${GLUE_DIR}/mpt_crypto.mjs')).default)
-// Browser glue: no Node loader, so read the wasm ourselves and pass it in.
+// Browser glue: no Node loader (it fetches in a browser), so instantiate the wasm
+// ourselves via the instantiateWasm hook — createWasm honors it before any fetch.
 await check('mpt_crypto.web.mjs (web)', async () => {
   const { default: factory } = await import('${GLUE_DIR}/mpt_crypto.web.mjs')
   const wasmBinary = require('fs').readFileSync('${GLUE_DIR}/mpt_crypto.wasm')
-  return factory({ wasmBinary })
+  return factory({
+    instantiateWasm: (imports, done) => {
+      done(new WebAssembly.Instance(new WebAssembly.Module(wasmBinary), imports))
+    },
+  })
 })
 "
