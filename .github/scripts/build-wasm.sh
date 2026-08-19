@@ -370,10 +370,19 @@ wasm_sha_esm="$(sha256_of "${OUT_DIR}/mpt_crypto.wasm")"
 # `mpt_crypto.wasm`, the one we ship — and move just the glue out. Linking straight to
 # mpt_crypto.web.mjs would emit and reference a separate mpt_crypto.web.wasm.
 web_tmp="$(mktemp -d)"
+trap 'rm -rf "${web_tmp}"' EXIT
 emcc "${LINK_FLAGS[@]}" -sEXPORT_ES6=1 -sENVIRONMENT=web,worker -o "${web_tmp}/mpt_crypto.mjs"
 wasm_sha_web="$(sha256_of "${web_tmp}/mpt_crypto.wasm")"
 mv "${web_tmp}/mpt_crypto.mjs" "${OUT_DIR}/mpt_crypto.web.mjs"
-rm -rf "${web_tmp}"
+
+# The browser glue exists precisely so browser bundlers never see a `node:` import; the
+# Node smoke test can't catch a regression (Node resolves node:module fine), so assert
+# the invariant at build time. Matches emscripten's dynamic `import("node:…")` and any
+# static `from "node:…"`, but not the benign `{…,node:…}` FS object literals.
+if grep -Eq 'import\(["'"'"']node:|from[[:space:]]*["'"'"']node:' "${OUT_DIR}/mpt_crypto.web.mjs"; then
+    echo "ERROR: mpt_crypto.web.mjs leaked a node: import — browser bundlers will reject it" >&2
+    exit 1
+fi
 
 # The .js/.mjs links overwrite the OUT_DIR .wasm in place; the browser link builds its
 # own in a temp dir. All three must wrap the byte-identical module (the browser glue
