@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build-and-test:
     # The matrix depends on XRPLF's self-hosted runners (heavy, heavy-arm64,
-    # macos15), which aren't shared with forks. Skip on forks so workflow
+    # macos-26-apple-clang-21), which aren't shared with forks. Skip on forks so workflow
     # changes can be iterated on without stalling in the runner queue.
     if: github.repository_owner == 'XRPLF'
     permissions:
@@ -35,10 +35,10 @@ jobs:
         include:
           - compiler: apple-clang
             build_type: Release
-            os: macos15
+            os: macos-26-apple-clang-21
           - compiler: apple-clang
             build_type: Debug
-            os: macos15
+            os: macos-26-apple-clang-21
 
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container != '' && fromJson(matrix.container) || null }}
@@ -61,7 +61,7 @@ jobs:
           fetch-depth: 0
 
       - name: Prepare runner
-        uses: XRPLF/actions/prepare-runner@2cbf481018d930656e9276fcc20dc0e3a0be5b6d
+        uses: XRPLF/actions/prepare-runner@7bf7ceca5932114abdd0d43493c3c30c5a654e13
         with:
           enable_ccache: false
 
